@@ -11,7 +11,9 @@ import (
 	"net/netip"
 	"runtime"
 	"slices"
+	"os"
 	"sort"
+	"path/filepath"
 	"strings"
 
 	"tailscale.com/envknob"
@@ -701,22 +703,55 @@ func GetInterfaceList() (InterfaceList, error) {
 }
 
 // netInterfaces is a wrapper around the standard library's net.Interfaces
-// that returns a []*Interface instead of a []net.Interface.
-// It exists because Android SDK 30 no longer permits Go's net.Interfaces
-// to work (Issue 2293); this wrapper lets us the Android app register
-// an alternate implementation.
+// that returns a []Interface instead of a []net.Interface.
+// It supports an environment variable TS_ALLOWED_INTERFACES for selectively
+// including interfaces by wildcard. If TS_ALLOWED_INTERFACES is empty, it
+// returns all interfaces.
 func netInterfaces() ([]Interface, error) {
+	// If an alternate interface getter has been registered (e.g. on Android),
+	// defer to it.
 	if altNetInterfaces != nil {
 		return altNetInterfaces()
 	}
+
 	ifs, err := net.Interfaces()
 	if err != nil {
 		return nil, err
 	}
-	ret := make([]Interface, len(ifs))
-	for i := range ifs {
-		ret[i].Interface = &ifs[i]
+
+	// Prepare the slice we’ll populate with allowed interfaces.
+	ret := make([]Interface, 0, len(ifs))
+
+	// Read TS_ALLOWED_INTERFACES and split on whitespace. For example:
+	//   TS_ALLOWED_INTERFACES="eth* en* bond*"
+	// would match interface names like "eth0", "en0", "bond1", etc.
+	allowed := strings.Fields(os.Getenv("TS_ALLOWED_INTERFACES"))
+
+	// If TS_ALLOWED_INTERFACES is empty, return all interfaces.
+	if len(allowed) == 0 {
+		for _, ifc := range ifs {
+			fmt.Printf("[tailscale] Adding interface %q (no TS_ALLOWED_INTERFACES set)\n", ifc.Name)
+			ret = append(ret, Interface{Interface: &ifc})
+		}
+		return ret, nil
 	}
+
+	// Otherwise, only include interfaces matching any wildcard/pattern in `allowed`.
+	for _, ifc := range ifs {
+		for _, pattern := range allowed {
+			match, err := filepath.Match(pattern, ifc.Name)
+			if err != nil {
+				fmt.Printf("[tailscale] Ignoring invalid pattern %q in TS_ALLOWED_INTERFACES: %v\n", pattern, err)
+				continue
+			}
+			if match {
+				fmt.Printf("[tailscale] Allowing interface %q (matched pattern %q)\n", ifc.Name, pattern)
+				ret = append(ret, Interface{Interface: &ifc})
+				break // No need to check other patterns if one matched
+			}
+		}
+	}
+
 	return ret, nil
 }
 
