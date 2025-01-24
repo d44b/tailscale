@@ -166,6 +166,7 @@ func main() {
 		PodIP:                                 defaultEnv("POD_IP", ""),
 		EnableForwardingOptimizations:         defaultBool("TS_EXPERIMENTAL_ENABLE_FORWARDING_OPTIMIZATIONS", false),
 		HealthCheckAddrPort:                   defaultEnv("TS_HEALTHCHECK_ADDR_PORT", ""),
+        LogoutOnShutdown:                      defaultBool("TS_LOGOUT_ON_SHUTDOWN", false),
 	}
 
 	if err := cfg.validate(); err != nil {
@@ -206,12 +207,18 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to bring up tailscale: %v", err)
 	}
-	killTailscaled := func() {
-		if err := daemonProcess.Signal(unix.SIGTERM); err != nil {
-			log.Fatalf("error shutting tailscaled down: %v", err)
-		}
-	}
-	defer killTailscaled()
+    killTailscaled := func() {
+        if cfg.LogoutOnShutdown {
+            log.Println("Logging out of Tailscale before shutdown")
+            if err := tailscaleLogout(cfg.Socket); err != nil {
+                log.Printf("Failed to log out of Tailscale: %v", err)
+            }
+        }
+        if err := daemonProcess.Signal(unix.SIGTERM); err != nil {
+            log.Fatalf("error shutting tailscaled down: %v", err)
+        }
+    }
+    defer killTailscaled()
 
 	if cfg.EnableForwardingOptimizations {
 		if err := client.SetUDPGROForwarding(bootCtx); err != nil {
@@ -1435,4 +1442,11 @@ func runHealthz(addr string, h *healthz) {
 			log.Fatalf("failed running health endpoint: %v", err)
 		}
 	}()
+}
+
+func tailscaleLogout(socketPath string) error {
+    cmd := exec.Command("tailscale", "--socket="+socketPath, "logout")
+    cmd.Stdout = os.Stdout
+    cmd.Stderr = os.Stderr
+    return cmd.Run()
 }
