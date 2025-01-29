@@ -49,11 +49,13 @@ import (
 	"tailscale.com/util/mak"
 	"tailscale.com/util/set"
 	"tailscale.com/util/testenv"
+	"tailscale.com/util/usermetric"
 	"tailscale.com/version"
 	"tailscale.com/wgengine/capture"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/magicsock"
 	"tailscale.com/wgengine/netlog"
+	"tailscale.com/wgengine/netstack/gro"
 	"tailscale.com/wgengine/router"
 	"tailscale.com/wgengine/wgcfg"
 	"tailscale.com/wgengine/wgint"
@@ -194,6 +196,10 @@ type Config struct {
 	// HealthTracker, if non-nil, is the health tracker to use.
 	HealthTracker *health.Tracker
 
+	// Metrics is the usermetrics registry to use.
+	// Mandatory, if not set, an error is returned.
+	Metrics *usermetric.Registry
+
 	// Dialer is the dialer to use for outbound connections.
 	// If nil, a new Dialer is created.
 	Dialer *tsdial.Dialer
@@ -248,6 +254,8 @@ func NewFakeUserspaceEngine(logf logger.Logf, opts ...any) (Engine, error) {
 			conf.ControlKnobs = v
 		case *health.Tracker:
 			conf.HealthTracker = v
+		case *usermetric.Registry:
+			conf.Metrics = v
 		default:
 			return nil, fmt.Errorf("unknown option type %T", v)
 		}
@@ -264,6 +272,10 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 
 	if testenv.InTest() && conf.HealthTracker == nil {
 		panic("NewUserspaceEngine called without HealthTracker (being strict in tests)")
+	}
+
+	if conf.Metrics == nil {
+		return nil, errors.New("NewUserspaceEngine: opts.Metrics is required, please pass a *usermetric.Registry")
 	}
 
 	if conf.Tun == nil {
@@ -288,9 +300,9 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 
 	var tsTUNDev *tstun.Wrapper
 	if conf.IsTAP {
-		tsTUNDev = tstun.WrapTAP(logf, conf.Tun)
+		tsTUNDev = tstun.WrapTAP(logf, conf.Tun, conf.Metrics)
 	} else {
-		tsTUNDev = tstun.Wrap(logf, conf.Tun)
+		tsTUNDev = tstun.Wrap(logf, conf.Tun, conf.Metrics)
 	}
 	closePool.add(tsTUNDev)
 
@@ -386,6 +398,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		NoteRecvActivity: e.noteRecvActivity,
 		NetMon:           e.netMon,
 		HealthTracker:    e.health,
+		Metrics:          conf.Metrics,
 		ControlKnobs:     conf.ControlKnobs,
 		OnPortUpdate:     onPortUpdate,
 		PeerByKeyFunc:    e.PeerByKey,
@@ -491,6 +504,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 	if err := e.router.Up(); err != nil {
 		return nil, fmt.Errorf("router.Up: %w", err)
 	}
+	tsTUNDev.SetLinkFeaturesPostUp()
 
 	// It's a little pointless to apply no-op settings here (they
 	// should already be empty?), but it at least exercises the
@@ -519,7 +533,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 }
 
 // echoRespondToAll is an inbound post-filter responding to all echo requests.
-func echoRespondToAll(p *packet.Parsed, t *tstun.Wrapper) filter.Response {
+func echoRespondToAll(p *packet.Parsed, t *tstun.Wrapper, gro *gro.GRO) (filter.Response, *gro.GRO) {
 	if p.IsEchoRequest() {
 		header := p.ICMP4Header()
 		header.ToResponse()
@@ -531,9 +545,9 @@ func echoRespondToAll(p *packet.Parsed, t *tstun.Wrapper) filter.Response {
 		// it away. If this ever gets run in non-fake mode, you'll
 		// get double responses to pings, which is an indicator you
 		// shouldn't be doing that I guess.)
-		return filter.Accept
+		return filter.Accept, gro
 	}
-	return filter.Accept
+	return filter.Accept, gro
 }
 
 // handleLocalPackets inspects packets coming from the local network
@@ -838,8 +852,7 @@ func (e *userspaceEngine) updateActivityMapsLocked(trackNodes []key.NodePublic, 
 // hasOverlap checks if there is a IPPrefix which is common amongst the two
 // provided slices.
 func hasOverlap(aips, rips views.Slice[netip.Prefix]) bool {
-	for i := range aips.Len() {
-		aip := aips.At(i)
+	for _, aip := range aips.All() {
 		if views.SliceContains(rips, aip) {
 			return true
 		}
@@ -1222,7 +1235,7 @@ func (e *userspaceEngine) linkChange(delta *netmon.ChangeDelta) {
 	// and Apple platforms.
 	if changed {
 		switch runtime.GOOS {
-		case "linux", "android", "ios", "darwin":
+		case "linux", "android", "ios", "darwin", "openbsd":
 			e.wgLock.Lock()
 			dnsCfg := e.lastDNSConfig
 			e.wgLock.Unlock()
@@ -1315,9 +1328,9 @@ func (e *userspaceEngine) mySelfIPMatchingFamily(dst netip.Addr) (src netip.Addr
 	if addrs.Len() == 0 {
 		return zero, errors.New("no self address in netmap")
 	}
-	for i := range addrs.Len() {
-		if a := addrs.At(i); a.IsSingleIP() && a.Addr().BitLen() == dst.BitLen() {
-			return a.Addr(), nil
+	for _, p := range addrs.All() {
+		if p.IsSingleIP() && p.Addr().BitLen() == dst.BitLen() {
+			return p.Addr(), nil
 		}
 	}
 	return zero, errors.New("no self address in netmap matching address family")

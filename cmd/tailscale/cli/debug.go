@@ -22,6 +22,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
@@ -35,6 +36,7 @@ import (
 	"tailscale.com/hostinfo"
 	"tailscale.com/internal/noiseconn"
 	"tailscale.com/ipn"
+	"tailscale.com/net/netmon"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tshttpproxy"
 	"tailscale.com/paths"
@@ -174,6 +176,12 @@ var debugCmd = &ffcli.Command{
 			ShortHelp:  "Switch to some other random DERP home region for a short time",
 		},
 		{
+			Name:       "force-prefer-derp",
+			ShortUsage: "tailscale debug force-prefer-derp",
+			Exec:       forcePreferDERP,
+			ShortHelp:  "Prefer the given region ID if reachable (until restart, or 0 to clear)",
+		},
+		{
 			Name:       "force-netmap-update",
 			ShortUsage: "tailscale debug force-netmap-update",
 			Exec:       localAPIAction("force-netmap-update"),
@@ -212,6 +220,7 @@ var debugCmd = &ffcli.Command{
 				fs := newFlagSet("watch-ipn")
 				fs.BoolVar(&watchIPNArgs.netmap, "netmap", true, "include netmap in messages")
 				fs.BoolVar(&watchIPNArgs.initial, "initial", false, "include initial status")
+				fs.BoolVar(&watchIPNArgs.rateLimit, "rate-limit", true, "rate limit messags")
 				fs.BoolVar(&watchIPNArgs.showPrivateKey, "show-private-key", false, "include node private key in printed netmap")
 				fs.IntVar(&watchIPNArgs.count, "count", 0, "exit after printing this many statuses, or 0 to keep going forever")
 				return fs
@@ -319,7 +328,34 @@ var debugCmd = &ffcli.Command{
 				return fs
 			})(),
 		},
+		{
+			Name:       "resolve",
+			ShortUsage: "tailscale debug resolve <hostname>",
+			Exec:       runDebugResolve,
+			ShortHelp:  "Does a DNS lookup",
+			FlagSet: (func() *flag.FlagSet {
+				fs := newFlagSet("resolve")
+				fs.StringVar(&resolveArgs.net, "net", "ip", "network type to resolve (ip, ip4, ip6)")
+				return fs
+			})(),
+		},
+		{
+			Name:       "go-buildinfo",
+			ShortUsage: "tailscale debug go-buildinfo",
+			ShortHelp:  "Prints Go's runtime/debug.BuildInfo",
+			Exec:       runGoBuildInfo,
+		},
 	},
+}
+
+func runGoBuildInfo(ctx context.Context, args []string) error {
+	bi, ok := debug.ReadBuildInfo()
+	if !ok {
+		return errors.New("no Go build info")
+	}
+	e := json.NewEncoder(os.Stdout)
+	e.SetIndent("", "\t")
+	return e.Encode(bi)
 }
 
 var debugArgs struct {
@@ -472,6 +508,7 @@ var watchIPNArgs struct {
 	netmap         bool
 	initial        bool
 	showPrivateKey bool
+	rateLimit      bool
 	count          int
 }
 
@@ -482,6 +519,9 @@ func runWatchIPN(ctx context.Context, args []string) error {
 	}
 	if !watchIPNArgs.showPrivateKey {
 		mask |= ipn.NotifyNoPrivateKeys
+	}
+	if watchIPNArgs.rateLimit {
+		mask |= ipn.NotifyRateLimit
 	}
 	watcher, err := localClient.WatchIPNBus(ctx, mask)
 	if err != nil {
@@ -540,6 +580,25 @@ func runDERPMap(ctx context.Context, args []string) error {
 	enc := json.NewEncoder(Stdout)
 	enc.SetIndent("", "\t")
 	enc.Encode(dm)
+	return nil
+}
+
+func forcePreferDERP(ctx context.Context, args []string) error {
+	var n int
+	if len(args) != 1 {
+		return errors.New("expected exactly one integer argument")
+	}
+	n, err := strconv.Atoi(args[0])
+	if err != nil {
+		return fmt.Errorf("expected exactly one integer argument: %w", err)
+	}
+	b, err := json.Marshal(n)
+	if err != nil {
+		return fmt.Errorf("failed to marshal DERP region: %w", err)
+	}
+	if err := localClient.DebugActionBody(ctx, "force-prefer-derp", bytes.NewReader(b)); err != nil {
+		return fmt.Errorf("failed to force preferred DERP: %w", err)
+	}
 	return nil
 }
 
@@ -816,7 +875,13 @@ func runTS2021(ctx context.Context, args []string) error {
 	if ts2021Args.verbose {
 		logf = log.Printf
 	}
-	conn, err := (&controlhttp.Dialer{
+
+	netMon, err := netmon.New(logger.WithPrefix(logf, "netmon: "))
+	if err != nil {
+		return fmt.Errorf("creating netmon: %w", err)
+	}
+
+	noiseDialer := &controlhttp.Dialer{
 		Hostname:        ts2021Args.host,
 		HTTPPort:        "80",
 		HTTPSPort:       "443",
@@ -825,7 +890,22 @@ func runTS2021(ctx context.Context, args []string) error {
 		ProtocolVersion: uint16(ts2021Args.version),
 		Dialer:          dialFunc,
 		Logf:            logf,
-	}).Dial(ctx)
+		NetMon:          netMon,
+	}
+	const tries = 2
+	for i := range tries {
+		err := tryConnect(ctx, keys.PublicKey, noiseDialer)
+		if err != nil {
+			log.Printf("error on attempt %d/%d: %v", i+1, tries, err)
+			continue
+		}
+		break
+	}
+	return nil
+}
+
+func tryConnect(ctx context.Context, controlPublic key.MachinePublic, noiseDialer *controlhttp.Dialer) error {
+	conn, err := noiseDialer.Dial(ctx)
 	log.Printf("controlhttp.Dial = %p, %v", conn, err)
 	if err != nil {
 		return err
@@ -833,8 +913,8 @@ func runTS2021(ctx context.Context, args []string) error {
 	log.Printf("did noise handshake")
 
 	gotPeer := conn.Peer()
-	if gotPeer != keys.PublicKey {
-		log.Printf("peer = %v, want %v", gotPeer, keys.PublicKey)
+	if gotPeer != controlPublic {
+		log.Printf("peer = %v, want %v", gotPeer, controlPublic)
 		return errors.New("key mismatch")
 	}
 
@@ -866,7 +946,7 @@ func runTS2021(ctx context.Context, args []string) error {
 	// Make a /whoami request to the server to verify that we can actually
 	// communicate over the newly-established connection.
 	whoamiURL := "http://" + ts2021Args.host + "/machine/whoami"
-	req, err = http.NewRequestWithContext(ctx, "GET", whoamiURL, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", whoamiURL, nil)
 	if err != nil {
 		return err
 	}
@@ -1165,5 +1245,28 @@ func runDebugDialTypes(ctx context.Context, args []string) error {
 	}
 
 	fmt.Printf("%s", body)
+	return nil
+}
+
+var resolveArgs struct {
+	net string // "ip", "ip4", "ip6""
+}
+
+func runDebugResolve(ctx context.Context, args []string) error {
+	if len(args) != 1 {
+		return errors.New("usage: tailscale debug resolve <hostname>")
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	host := args[0]
+	ips, err := net.DefaultResolver.LookupIP(ctx, resolveArgs.net, host)
+	if err != nil {
+		return err
+	}
+	for _, ip := range ips {
+		fmt.Printf("%s\n", ip)
+	}
 	return nil
 }

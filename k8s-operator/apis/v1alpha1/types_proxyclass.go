@@ -25,7 +25,7 @@ var ProxyClassKind = "ProxyClass"
 // connector.spec.proxyClass field.
 // ProxyClass is a cluster scoped resource.
 // More info:
-// https://tailscale.com/kb/1236/kubernetes-operator#cluster-resource-customization-using-proxyclass-custom-resource.
+// https://tailscale.com/kb/1445/kubernetes-operator-customization#cluster-resource-customization-using-proxyclass-custom-resource
 type ProxyClass struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -73,7 +73,7 @@ type TailscaleConfig struct {
 	// routes advertized by other nodes on the tailnet, such as subnet
 	// routes.
 	// This is equivalent of passing --accept-routes flag to a tailscale Linux client.
-	// https://tailscale.com/kb/1019/subnets#use-your-subnet-routes-from-other-machines
+	// https://tailscale.com/kb/1019/subnets#use-your-subnet-routes-from-other-devices
 	// Defaults to false.
 	AcceptRoutes bool `json:"acceptRoutes,omitempty"`
 }
@@ -154,13 +154,39 @@ type Pod struct {
 	// https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#scheduling
 	// +optional
 	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
+	// Proxy Pod's topology spread constraints.
+	// By default Tailscale Kubernetes operator does not apply any topology spread constraints.
+	// https://kubernetes.io/docs/concepts/scheduling-eviction/topology-spread-constraints/
 	// +optional
+	TopologySpreadConstraints []corev1.TopologySpreadConstraint `json:"topologySpreadConstraints,omitempty"`
 }
 
+// +kubebuilder:validation:XValidation:rule="!(has(self.serviceMonitor) && self.serviceMonitor.enable  && !self.enable)",message="ServiceMonitor can only be enabled if metrics are enabled"
 type Metrics struct {
 	// Setting enable to true will make the proxy serve Tailscale metrics
-	// at <pod-ip>:9001/debug/metrics.
+	// at <pod-ip>:9002/metrics.
+	// A metrics Service named <proxy-statefulset>-metrics will also be created in the operator's namespace and will
+	// serve the metrics at <service-ip>:9002/metrics.
+	//
+	// In 1.78.x and 1.80.x, this field also serves as the default value for
+	// .spec.statefulSet.pod.tailscaleContainer.debug.enable. From 1.82.0, both
+	// fields will independently default to false.
+	//
 	// Defaults to false.
+	Enable bool `json:"enable"`
+	// Enable to create a Prometheus ServiceMonitor for scraping the proxy's Tailscale metrics.
+	// The ServiceMonitor will select the metrics Service that gets created when metrics are enabled.
+	// The ingested metrics for each Service monitor will have labels to identify the proxy:
+	// ts_proxy_type: ingress_service|ingress_resource|connector|proxygroup
+	// ts_proxy_parent_name: name of the parent resource (i.e name of the Connector, Tailscale Ingress, Tailscale Service or ProxyGroup)
+	// ts_proxy_parent_namespace: namespace of the parent resource (if the parent resource is not cluster scoped)
+	// job: ts_<proxy type>_[<parent namespace>]_<parent_name>
+	// +optional
+	ServiceMonitor *ServiceMonitor `json:"serviceMonitor"`
+}
+
+type ServiceMonitor struct {
+	// If Enable is set to true, a Prometheus ServiceMonitor will be created. Enable can only be set to true if metrics are enabled.
 	Enable bool `json:"enable"`
 }
 
@@ -197,14 +223,35 @@ type Container struct {
 	// +optional
 	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
 	// Container security context.
-	// Security context specified here will override the security context by the operator.
-	// By default the operator:
-	// - sets 'privileged: true' for the init container
-	// - set NET_ADMIN capability for tailscale container for proxies that
-	// are created for Services or Connector.
+	// Security context specified here will override the security context set by the operator.
+	// By default the operator sets the Tailscale container and the Tailscale init container to privileged
+	// for proxies created for Tailscale ingress and egress Service, Connector and ProxyGroup.
+	// You can reduce the permissions of the Tailscale container to cap NET_ADMIN by
+	// installing device plugin in your cluster and configuring the proxies tun device to be created
+	// by the device plugin, see  https://github.com/tailscale/tailscale/issues/10814#issuecomment-2479977752
 	// https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#security-context
 	// +optional
 	SecurityContext *corev1.SecurityContext `json:"securityContext,omitempty"`
+	// Configuration for enabling extra debug information in the container.
+	// Not recommended for production use.
+	// +optional
+	Debug *Debug `json:"debug,omitempty"`
+}
+
+type Debug struct {
+	// Enable tailscaled's HTTP pprof endpoints at <pod-ip>:9001/debug/pprof/
+	// and internal debug metrics endpoint at <pod-ip>:9001/debug/metrics, where
+	// 9001 is a container port named "debug". The endpoints and their responses
+	// may change in backwards incompatible ways in the future, and should not
+	// be considered stable.
+	//
+	// In 1.78.x and 1.80.x, this setting will default to the value of
+	// .spec.metrics.enable, and requests to the "metrics" port matching the
+	// mux pattern /debug/ will be forwarded to the "debug" port. In 1.82.x,
+	// this setting will default to false, and no requests will be proxied.
+	//
+	// +optional
+	Enable bool `json:"enable"`
 }
 
 type Env struct {

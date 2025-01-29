@@ -24,6 +24,7 @@ import (
 	"os/user"
 	"reflect"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -32,6 +33,8 @@ import (
 	"time"
 
 	gossh "github.com/tailscale/golang-x-crypto/ssh"
+	"golang.org/x/net/http2"
+	"golang.org/x/net/http2/h2c"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/net/memnet"
@@ -47,7 +50,7 @@ import (
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/ptr"
 	"tailscale.com/util/cibuild"
-	"tailscale.com/util/lineread"
+	"tailscale.com/util/lineiter"
 	"tailscale.com/util/must"
 	"tailscale.com/version/distro"
 	"tailscale.com/wgengine"
@@ -56,11 +59,12 @@ import (
 func TestMatchRule(t *testing.T) {
 	someAction := new(tailcfg.SSHAction)
 	tests := []struct {
-		name     string
-		rule     *tailcfg.SSHRule
-		ci       *sshConnInfo
-		wantErr  error
-		wantUser string
+		name          string
+		rule          *tailcfg.SSHRule
+		ci            *sshConnInfo
+		wantErr       error
+		wantUser      string
+		wantAcceptEnv []string
 	}{
 		{
 			name: "invalid-conn",
@@ -154,6 +158,21 @@ func TestMatchRule(t *testing.T) {
 			wantUser: "thealice",
 		},
 		{
+			name: "ok-with-accept-env",
+			rule: &tailcfg.SSHRule{
+				Action:     someAction,
+				Principals: []*tailcfg.SSHPrincipal{{Any: true}},
+				SSHUsers: map[string]string{
+					"*":     "ubuntu",
+					"alice": "thealice",
+				},
+				AcceptEnv: []string{"EXAMPLE", "?_?", "TEST_*"},
+			},
+			ci:            &sshConnInfo{sshUser: "alice"},
+			wantUser:      "thealice",
+			wantAcceptEnv: []string{"EXAMPLE", "?_?", "TEST_*"},
+		},
+		{
 			name: "no-users-for-reject",
 			rule: &tailcfg.SSHRule{
 				Principals: []*tailcfg.SSHPrincipal{{Any: true}},
@@ -210,7 +229,7 @@ func TestMatchRule(t *testing.T) {
 				info: tt.ci,
 				srv:  &server{logf: t.Logf},
 			}
-			got, gotUser, err := c.matchRule(tt.rule, nil)
+			got, gotUser, gotAcceptEnv, err := c.matchRule(tt.rule, nil)
 			if err != tt.wantErr {
 				t.Errorf("err = %v; want %v", err, tt.wantErr)
 			}
@@ -219,6 +238,128 @@ func TestMatchRule(t *testing.T) {
 			}
 			if err == nil && got == nil {
 				t.Errorf("expected non-nil action on success")
+			}
+			if !slices.Equal(gotAcceptEnv, tt.wantAcceptEnv) {
+				t.Errorf("acceptEnv = %v; want %v", gotAcceptEnv, tt.wantAcceptEnv)
+			}
+		})
+	}
+}
+
+func TestEvalSSHPolicy(t *testing.T) {
+	someAction := new(tailcfg.SSHAction)
+	tests := []struct {
+		name          string
+		policy        *tailcfg.SSHPolicy
+		ci            *sshConnInfo
+		wantMatch     bool
+		wantUser      string
+		wantAcceptEnv []string
+	}{
+		{
+			name: "multiple-matches-picks-first-match",
+			policy: &tailcfg.SSHPolicy{
+				Rules: []*tailcfg.SSHRule{
+					{
+						Action:     someAction,
+						Principals: []*tailcfg.SSHPrincipal{{Any: true}},
+						SSHUsers: map[string]string{
+							"other": "other1",
+						},
+					},
+					{
+						Action:     someAction,
+						Principals: []*tailcfg.SSHPrincipal{{Any: true}},
+						SSHUsers: map[string]string{
+							"*":     "ubuntu",
+							"alice": "thealice",
+						},
+						AcceptEnv: []string{"EXAMPLE", "?_?", "TEST_*"},
+					},
+					{
+						Action:     someAction,
+						Principals: []*tailcfg.SSHPrincipal{{Any: true}},
+						SSHUsers: map[string]string{
+							"other2": "other3",
+						},
+					},
+					{
+						Action:     someAction,
+						Principals: []*tailcfg.SSHPrincipal{{Any: true}},
+						SSHUsers: map[string]string{
+							"*":     "ubuntu",
+							"alice": "thealice",
+							"mark":  "markthe",
+						},
+						AcceptEnv: []string{"*"},
+					},
+				},
+			},
+			ci:            &sshConnInfo{sshUser: "alice"},
+			wantUser:      "thealice",
+			wantAcceptEnv: []string{"EXAMPLE", "?_?", "TEST_*"},
+			wantMatch:     true,
+		},
+		{
+			name: "no-matches-returns-failure",
+			policy: &tailcfg.SSHPolicy{
+				Rules: []*tailcfg.SSHRule{
+					{
+						Action:     someAction,
+						Principals: []*tailcfg.SSHPrincipal{{Any: true}},
+						SSHUsers: map[string]string{
+							"other": "other1",
+						},
+					},
+					{
+						Action:     someAction,
+						Principals: []*tailcfg.SSHPrincipal{{Any: true}},
+						SSHUsers: map[string]string{
+							"fedora": "ubuntu",
+						},
+						AcceptEnv: []string{"EXAMPLE", "?_?", "TEST_*"},
+					},
+					{
+						Action:     someAction,
+						Principals: []*tailcfg.SSHPrincipal{{Any: true}},
+						SSHUsers: map[string]string{
+							"other2": "other3",
+						},
+					},
+					{
+						Action:     someAction,
+						Principals: []*tailcfg.SSHPrincipal{{Any: true}},
+						SSHUsers: map[string]string{
+							"mark": "markthe",
+						},
+						AcceptEnv: []string{"*"},
+					},
+				},
+			},
+			ci:            &sshConnInfo{sshUser: "alice"},
+			wantUser:      "",
+			wantAcceptEnv: nil,
+			wantMatch:     false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := &conn{
+				info: tt.ci,
+				srv:  &server{logf: t.Logf},
+			}
+			got, gotUser, gotAcceptEnv, match := c.evalSSHPolicy(tt.policy, nil)
+			if match != tt.wantMatch {
+				t.Errorf("match = %v; want %v", match, tt.wantMatch)
+			}
+			if gotUser != tt.wantUser {
+				t.Errorf("user = %q; want %q", gotUser, tt.wantUser)
+			}
+			if tt.wantMatch == true && got == nil {
+				t.Errorf("expected non-nil action on success")
+			}
+			if !slices.Equal(gotAcceptEnv, tt.wantAcceptEnv) {
+				t.Errorf("acceptEnv = %v; want %v", gotAcceptEnv, tt.wantAcceptEnv)
 			}
 		})
 	}
@@ -342,10 +483,9 @@ func TestSSHRecordingCancelsSessionsOnUploadFailure(t *testing.T) {
 	}
 
 	var handler http.HandlerFunc
-	recordingServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	recordingServer := mockRecordingServer(t, func(w http.ResponseWriter, r *http.Request) {
 		handler(w, r)
-	}))
-	defer recordingServer.Close()
+	})
 
 	s := &server{
 		logf: t.Logf,
@@ -394,9 +534,10 @@ func TestSSHRecordingCancelsSessionsOnUploadFailure(t *testing.T) {
 		{
 			name: "upload-fails-after-starting",
 			handler: func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusOK)
+				w.(http.Flusher).Flush()
 				r.Body.Read(make([]byte, 1))
 				time.Sleep(100 * time.Millisecond)
-				w.WriteHeader(http.StatusInternalServerError)
 			},
 			sshCommand:       "echo hello && sleep 1 && echo world",
 			wantClientOutput: "\r\n\r\nsession terminated\r\n\r\n",
@@ -409,6 +550,7 @@ func TestSSHRecordingCancelsSessionsOnUploadFailure(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			s.logf = t.Logf
 			tstest.Replace(t, &handler, tt.handler)
 			sc, dc := memnet.NewTCPConn(src, dst, 1024)
 			var wg sync.WaitGroup
@@ -458,12 +600,12 @@ func TestMultipleRecorders(t *testing.T) {
 		t.Skipf("skipping on %q; only runs on linux and darwin", runtime.GOOS)
 	}
 	done := make(chan struct{})
-	recordingServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	recordingServer := mockRecordingServer(t, func(w http.ResponseWriter, r *http.Request) {
 		defer close(done)
-		io.ReadAll(r.Body)
 		w.WriteHeader(http.StatusOK)
-	}))
-	defer recordingServer.Close()
+		w.(http.Flusher).Flush()
+		io.ReadAll(r.Body)
+	})
 	badRecorder, err := net.Listen("tcp", ":0")
 	if err != nil {
 		t.Fatal(err)
@@ -471,15 +613,9 @@ func TestMultipleRecorders(t *testing.T) {
 	badRecorderAddr := badRecorder.Addr().String()
 	badRecorder.Close()
 
-	badRecordingServer500 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(500)
-	}))
-	defer badRecordingServer500.Close()
-
-	badRecordingServer200 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(200)
-	}))
-	defer badRecordingServer200.Close()
+	badRecordingServer500 := mockRecordingServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	})
 
 	s := &server{
 		logf: t.Logf,
@@ -491,7 +627,6 @@ func TestMultipleRecorders(t *testing.T) {
 					Recorders: []netip.AddrPort{
 						netip.MustParseAddrPort(badRecorderAddr),
 						netip.MustParseAddrPort(badRecordingServer500.Listener.Addr().String()),
-						netip.MustParseAddrPort(badRecordingServer200.Listener.Addr().String()),
 						netip.MustParseAddrPort(recordingServer.Listener.Addr().String()),
 					},
 					OnRecordingFailure: &tailcfg.SSHRecorderFailureAction{
@@ -562,19 +697,21 @@ func TestSSHRecordingNonInteractive(t *testing.T) {
 	}
 	var recording []byte
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	recordingServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	recordingServer := mockRecordingServer(t, func(w http.ResponseWriter, r *http.Request) {
 		defer cancel()
+		w.WriteHeader(http.StatusOK)
+		w.(http.Flusher).Flush()
+
 		var err error
 		recording, err = io.ReadAll(r.Body)
 		if err != nil {
 			t.Error(err)
 			return
 		}
-	}))
-	defer recordingServer.Close()
+	})
 
 	s := &server{
-		logf: logger.Discard,
+		logf: t.Logf,
 		lb: &localState{
 			sshEnabled: true,
 			matchingRule: newSSHRule(
@@ -826,7 +963,7 @@ func TestSSHAuthFlow(t *testing.T) {
 func TestSSH(t *testing.T) {
 	var logf logger.Logf = t.Logf
 	sys := &tsd.System{}
-	eng, err := wgengine.NewFakeUserspaceEngine(logf, sys.Set, sys.HealthTracker())
+	eng, err := wgengine.NewFakeUserspaceEngine(logf, sys.Set, sys.HealthTracker(), sys.UserMetricsRegistry())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -984,14 +1121,11 @@ func TestSSH(t *testing.T) {
 
 func parseEnv(out []byte) map[string]string {
 	e := map[string]string{}
-	lineread.Reader(bytes.NewReader(out), func(line []byte) error {
-		i := bytes.IndexByte(line, '=')
-		if i == -1 {
-			return nil
+	for line := range lineiter.Bytes(out) {
+		if i := bytes.IndexByte(line, '='); i != -1 {
+			e[string(line[:i])] = string(line[i+1:])
 		}
-		e[string(line[:i])] = string(line[i+1:])
-		return nil
-	})
+	}
 	return e
 }
 
@@ -1162,4 +1296,23 @@ func TestStdOsUserUserAssumptions(t *testing.T) {
 	if got, want := v.NumField(), 5; got != want {
 		t.Errorf("os/user.User has %v fields; this package assumes %v", got, want)
 	}
+}
+
+func mockRecordingServer(t *testing.T, handleRecord http.HandlerFunc) *httptest.Server {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /record", func(http.ResponseWriter, *http.Request) {
+		t.Errorf("v1 recording endpoint called")
+	})
+	mux.HandleFunc("HEAD /v2/record", func(http.ResponseWriter, *http.Request) {})
+	mux.HandleFunc("POST /v2/record", handleRecord)
+
+	h2s := &http2.Server{}
+	srv := httptest.NewUnstartedServer(h2c.NewHandler(mux, h2s))
+	if err := http2.ConfigureServer(srv.Config, h2s); err != nil {
+		t.Errorf("configuring HTTP/2 support in recording server: %v", err)
+	}
+	srv.Start()
+	t.Cleanup(srv.Close)
+	return srv
 }

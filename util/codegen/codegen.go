@@ -24,7 +24,7 @@ import (
 var flagCopyright = flag.Bool("copyright", true, "add Tailscale copyright to generated file headers")
 
 // LoadTypes returns all named types in pkgName, keyed by their type name.
-func LoadTypes(buildTags string, pkgName string) (*packages.Package, map[string]*types.Named, error) {
+func LoadTypes(buildTags string, pkgName string) (*packages.Package, map[string]types.Type, error) {
 	cfg := &packages.Config{
 		Mode:  packages.NeedTypes | packages.NeedTypesInfo | packages.NeedSyntax | packages.NeedName,
 		Tests: buildTags == "test",
@@ -95,6 +95,11 @@ func (it *ImportTracker) Import(pkg string) {
 	if pkg != "" && !it.packages[pkg] {
 		mak.Set(&it.packages, pkg, true)
 	}
+}
+
+// Has reports whether the specified package has been imported.
+func (it *ImportTracker) Has(pkg string) bool {
+	return it.packages[pkg]
 }
 
 func (it *ImportTracker) qualifier(pkg *types.Package) string {
@@ -181,8 +186,8 @@ func writeFormatted(code []byte, path string) error {
 }
 
 // namedTypes returns all named types in pkg, keyed by their type name.
-func namedTypes(pkg *packages.Package) map[string]*types.Named {
-	nt := make(map[string]*types.Named)
+func namedTypes(pkg *packages.Package) map[string]types.Type {
+	nt := make(map[string]types.Type)
 	for _, file := range pkg.Syntax {
 		for _, d := range file.Decls {
 			decl, ok := d.(*ast.GenDecl)
@@ -198,11 +203,10 @@ func namedTypes(pkg *packages.Package) map[string]*types.Named {
 				if !ok {
 					continue
 				}
-				typ, ok := typeNameObj.Type().(*types.Named)
-				if !ok {
-					continue
+				switch typ := typeNameObj.Type(); typ.(type) {
+				case *types.Alias, *types.Named:
+					nt[spec.Name.Name] = typ
 				}
-				nt[spec.Name.Name] = typ
 			}
 		}
 	}
@@ -273,11 +277,16 @@ func IsInvalid(t types.Type) bool {
 // It has special handling for some types that contain pointers
 // that we know are free from memory aliasing/mutation concerns.
 func ContainsPointers(typ types.Type) bool {
-	switch typ.String() {
+	s := typ.String()
+	switch s {
 	case "time.Time":
-		// time.Time contains a pointer that does not need copying
+		// time.Time contains a pointer that does not need cloning.
 		return false
-	case "inet.af/netip.Addr", "net/netip.Addr", "net/netip.Prefix", "net/netip.AddrPort":
+	case "inet.af/netip.Addr":
+		return false
+	}
+	if strings.HasPrefix(s, "unique.Handle[") {
+		// unique.Handle contains a pointer that does not need cloning.
 		return false
 	}
 	switch ft := typ.Underlying().(type) {
@@ -356,14 +365,25 @@ func FormatTypeParams(params *types.TypeParamList, it *ImportTracker) (constrain
 
 // LookupMethod returns the method with the specified name in t, or nil if the method does not exist.
 func LookupMethod(t types.Type, name string) *types.Func {
-	if t, ok := t.(*types.Named); ok {
-		for i := 0; i < t.NumMethods(); i++ {
-			if method := t.Method(i); method.Name() == name {
-				return method
+	switch t := t.(type) {
+	case *types.Alias:
+		return LookupMethod(t.Rhs(), name)
+	case *types.TypeParam:
+		return LookupMethod(t.Constraint(), name)
+	case *types.Pointer:
+		return LookupMethod(t.Elem(), name)
+	case *types.Named:
+		switch u := t.Underlying().(type) {
+		case *types.Interface:
+			return LookupMethod(u, name)
+		default:
+			for i := 0; i < t.NumMethods(); i++ {
+				if method := t.Method(i); method.Name() == name {
+					return method
+				}
 			}
 		}
-	}
-	if t, ok := t.Underlying().(*types.Interface); ok {
+	case *types.Interface:
 		for i := 0; i < t.NumMethods(); i++ {
 			if method := t.Method(i); method.Name() == name {
 				return method
@@ -371,4 +391,13 @@ func LookupMethod(t types.Type, name string) *types.Func {
 		}
 	}
 	return nil
+}
+
+// NamedTypeOf is like t.(*types.Named), but also works with type aliases.
+func NamedTypeOf(t types.Type) (named *types.Named, ok bool) {
+	if a, ok := t.(*types.Alias); ok {
+		return NamedTypeOf(types.Unalias(a))
+	}
+	named, ok = t.(*types.Named)
+	return
 }

@@ -14,7 +14,27 @@
 - [DNSConfigList](#dnsconfiglist)
 - [ProxyClass](#proxyclass)
 - [ProxyClassList](#proxyclasslist)
+- [ProxyGroup](#proxygroup)
+- [ProxyGroupList](#proxygrouplist)
+- [Recorder](#recorder)
+- [RecorderList](#recorderlist)
 
+
+
+#### AppConnector
+
+
+
+AppConnector defines a Tailscale app connector node configured via Connector.
+
+
+
+_Appears in:_
+- [ConnectorSpec](#connectorspec)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `routes` _[Routes](#routes)_ | Routes are optional preconfigured routes for the domains routed via the app connector.<br />If not set, routes for the domains will be discovered dynamically.<br />If set, the app connector will immediately be able to route traffic using the preconfigured routes, but may<br />also dynamically discover other routes.<br />https://tailscale.com/kb/1332/apps-best-practices#preconfiguration |  | Format: cidr <br />MinItems: 1 <br />Type: string <br /> |
 
 
 
@@ -28,7 +48,7 @@ node can be configured to act as a Tailscale subnet router and/or a Tailscale
 exit node.
 Connector is a cluster-scoped resource.
 More info:
-https://tailscale.com/kb/1236/kubernetes-operator#deploying-exit-nodes-and-subnet-routers-on-kubernetes-using-connector-custom-resource
+https://tailscale.com/kb/1441/kubernetes-operator-connector
 
 
 
@@ -79,11 +99,12 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `tags` _[Tags](#tags)_ | Tags that the Tailscale node will be tagged with.<br />Defaults to [tag:k8s].<br />To autoapprove the subnet routes or exit node defined by a Connector,<br />you can configure Tailscale ACLs to give these tags the necessary<br />permissions.<br />See https://tailscale.com/kb/1018/acls/#auto-approvers-for-routes-and-exit-nodes.<br />If you specify custom tags here, you must also make the operator an owner of these tags.<br />See  https://tailscale.com/kb/1236/kubernetes-operator/#setting-up-the-kubernetes-operator.<br />Tags cannot be changed once a Connector node has been created.<br />Tag values must be in form ^tag:[a-zA-Z][a-zA-Z0-9-]*$. |  | Pattern: `^tag:[a-zA-Z][a-zA-Z0-9-]*$` <br />Type: string <br /> |
+| `tags` _[Tags](#tags)_ | Tags that the Tailscale node will be tagged with.<br />Defaults to [tag:k8s].<br />To autoapprove the subnet routes or exit node defined by a Connector,<br />you can configure Tailscale ACLs to give these tags the necessary<br />permissions.<br />See https://tailscale.com/kb/1337/acl-syntax#autoapprovers.<br />If you specify custom tags here, you must also make the operator an owner of these tags.<br />See  https://tailscale.com/kb/1236/kubernetes-operator/#setting-up-the-kubernetes-operator.<br />Tags cannot be changed once a Connector node has been created.<br />Tag values must be in form ^tag:[a-zA-Z][a-zA-Z0-9-]*$. |  | Pattern: `^tag:[a-zA-Z][a-zA-Z0-9-]*$` <br />Type: string <br /> |
 | `hostname` _[Hostname](#hostname)_ | Hostname is the tailnet hostname that should be assigned to the<br />Connector node. If unset, hostname defaults to <connector<br />name>-connector. Hostname can contain lower case letters, numbers and<br />dashes, it must not start or end with a dash and must be between 2<br />and 63 characters long. |  | Pattern: `^[a-z0-9][a-z0-9-]{0,61}[a-z0-9]$` <br />Type: string <br /> |
 | `proxyClass` _string_ | ProxyClass is the name of the ProxyClass custom resource that<br />contains configuration options that should be applied to the<br />resources created for this Connector. If unset, the operator will<br />create resources with the default configuration. |  |  |
-| `subnetRouter` _[SubnetRouter](#subnetrouter)_ | SubnetRouter defines subnet routes that the Connector node should<br />expose to tailnet. If unset, none are exposed.<br />https://tailscale.com/kb/1019/subnets/ |  |  |
-| `exitNode` _boolean_ | ExitNode defines whether the Connector node should act as a<br />Tailscale exit node. Defaults to false.<br />https://tailscale.com/kb/1103/exit-nodes |  |  |
+| `subnetRouter` _[SubnetRouter](#subnetrouter)_ | SubnetRouter defines subnet routes that the Connector device should<br />expose to tailnet as a Tailscale subnet router.<br />https://tailscale.com/kb/1019/subnets/<br />If this field is unset, the device does not get configured as a Tailscale subnet router.<br />This field is mutually exclusive with the appConnector field. |  |  |
+| `appConnector` _[AppConnector](#appconnector)_ | AppConnector defines whether the Connector device should act as a Tailscale app connector. A Connector that is<br />configured as an app connector cannot be a subnet router or an exit node. If this field is unset, the<br />Connector does not act as an app connector.<br />Note that you will need to manually configure the permissions and the domains for the app connector via the<br />Admin panel.<br />Note also that the main tested and supported use case of this config option is to deploy an app connector on<br />Kubernetes to access SaaS applications available on the public internet. Using the app connector to expose<br />cluster workloads or other internal workloads to tailnet might work, but this is not a use case that we have<br />tested or optimised for.<br />If you are using the app connector to access SaaS applications because you need a predictable egress IP that<br />can be whitelisted, it is also your responsibility to ensure that cluster traffic from the connector flows<br />via that predictable IP, for example by enforcing that cluster egress traffic is routed via an egress NAT<br />device with a static IP address.<br />https://tailscale.com/kb/1281/app-connectors |  |  |
+| `exitNode` _boolean_ | ExitNode defines whether the Connector device should act as a Tailscale exit node. Defaults to false.<br />This field is mutually exclusive with the appConnector field.<br />https://tailscale.com/kb/1103/exit-nodes |  |  |
 
 
 #### ConnectorStatus
@@ -102,6 +123,7 @@ _Appears in:_
 | `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#condition-v1-meta) array_ | List of status conditions to indicate the status of the Connector.<br />Known condition types are `ConnectorReady`. |  |  |
 | `subnetRoutes` _string_ | SubnetRoutes are the routes currently exposed to tailnet via this<br />Connector instance. |  |  |
 | `isExitNode` _boolean_ | IsExitNode is set to true if the Connector acts as an exit node. |  |  |
+| `isAppConnector` _boolean_ | IsAppConnector is set to true if the Connector acts as an app connector. |  |  |
 | `tailnetIPs` _string array_ | TailnetIPs is the set of tailnet IP addresses (both IPv4 and IPv6)<br />assigned to the Connector node. |  |  |
 | `hostname` _string_ | Hostname is the fully qualified domain name of the Connector node.<br />If MagicDNS is enabled in your tailnet, it is the MagicDNS name of the<br />node. |  |  |
 
@@ -123,7 +145,8 @@ _Appears in:_
 | `image` _string_ | Container image name. By default images are pulled from<br />docker.io/tailscale/tailscale, but the official images are also<br />available at ghcr.io/tailscale/tailscale. Specifying image name here<br />will override any proxy image values specified via the Kubernetes<br />operator's Helm chart values or PROXY_IMAGE env var in the operator<br />Deployment.<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#image |  |  |
 | `imagePullPolicy` _[PullPolicy](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#pullpolicy-v1-core)_ | Image pull policy. One of Always, Never, IfNotPresent. Defaults to Always.<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#image |  | Enum: [Always Never IfNotPresent] <br /> |
 | `resources` _[ResourceRequirements](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#resourcerequirements-v1-core)_ | Container resource requirements.<br />By default Tailscale Kubernetes operator does not apply any resource<br />requirements. The amount of resources required wil depend on the<br />amount of resources the operator needs to parse, usage patterns and<br />cluster size.<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#resources |  |  |
-| `securityContext` _[SecurityContext](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#securitycontext-v1-core)_ | Container security context.<br />Security context specified here will override the security context by the operator.<br />By default the operator:<br />- sets 'privileged: true' for the init container<br />- set NET_ADMIN capability for tailscale container for proxies that<br />are created for Services or Connector.<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#security-context |  |  |
+| `securityContext` _[SecurityContext](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#securitycontext-v1-core)_ | Container security context.<br />Security context specified here will override the security context set by the operator.<br />By default the operator sets the Tailscale container and the Tailscale init container to privileged<br />for proxies created for Tailscale ingress and egress Service, Connector and ProxyGroup.<br />You can reduce the permissions of the Tailscale container to cap NET_ADMIN by<br />installing device plugin in your cluster and configuring the proxies tun device to be created<br />by the device plugin, see  https://github.com/tailscale/tailscale/issues/10814#issuecomment-2479977752<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#security-context |  |  |
+| `debug` _[Debug](#debug)_ | Configuration for enabling extra debug information in the container.<br />Not recommended for production use. |  |  |
 
 
 #### DNSConfig
@@ -226,6 +249,22 @@ _Appears in:_
 | `nameserver` _[NameserverStatus](#nameserverstatus)_ | Nameserver describes the status of nameserver cluster resources. |  |  |
 
 
+#### Debug
+
+
+
+
+
+
+
+_Appears in:_
+- [Container](#container)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `enable` _boolean_ | Enable tailscaled's HTTP pprof endpoints at <pod-ip>:9001/debug/pprof/<br />and internal debug metrics endpoint at <pod-ip>:9001/debug/metrics, where<br />9001 is a container port named "debug". The endpoints and their responses<br />may change in backwards incompatible ways in the future, and should not<br />be considered stable.<br />In 1.78.x and 1.80.x, this setting will default to the value of<br />.spec.metrics.enable, and requests to the "metrics" port matching the<br />mux pattern /debug/ will be forwarded to the "debug" port. In 1.82.x,<br />this setting will default to false, and no requests will be proxied. |  |  |
+
+
 #### Env
 
 
@@ -236,6 +275,7 @@ _Appears in:_
 
 _Appears in:_
 - [Container](#container)
+- [RecorderContainer](#recordercontainer)
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
@@ -258,21 +298,19 @@ _Appears in:_
 
 
 
-#### Image
+#### HostnamePrefix
+
+_Underlying type:_ _string_
 
 
 
-
-
-
+_Validation:_
+- Pattern: `^[a-z0-9][a-z0-9-]{0,61}$`
+- Type: string
 
 _Appears in:_
-- [Nameserver](#nameserver)
+- [ProxyGroupSpec](#proxygroupspec)
 
-| Field | Description | Default | Validation |
-| --- | --- | --- | --- |
-| `repo` _string_ | Repo defaults to tailscale/k8s-nameserver. |  |  |
-| `tag` _string_ | Tag defaults to operator's own tag. |  |  |
 
 
 #### Metrics
@@ -288,7 +326,8 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `enable` _boolean_ | Setting enable to true will make the proxy serve Tailscale metrics<br />at <pod-ip>:9001/debug/metrics.<br />Defaults to false. |  |  |
+| `enable` _boolean_ | Setting enable to true will make the proxy serve Tailscale metrics<br />at <pod-ip>:9002/metrics.<br />A metrics Service named <proxy-statefulset>-metrics will also be created in the operator's namespace and will<br />serve the metrics at <service-ip>:9002/metrics.<br />In 1.78.x and 1.80.x, this field also serves as the default value for<br />.spec.statefulSet.pod.tailscaleContainer.debug.enable. From 1.82.0, both<br />fields will independently default to false.<br />Defaults to false. |  |  |
+| `serviceMonitor` _[ServiceMonitor](#servicemonitor)_ | Enable to create a Prometheus ServiceMonitor for scraping the proxy's Tailscale metrics.<br />The ServiceMonitor will select the metrics Service that gets created when metrics are enabled.<br />The ingested metrics for each Service monitor will have labels to identify the proxy:<br />ts_proxy_type: ingress_service\|ingress_resource\|connector\|proxygroup<br />ts_proxy_parent_name: name of the parent resource (i.e name of the Connector, Tailscale Ingress, Tailscale Service or ProxyGroup)<br />ts_proxy_parent_namespace: namespace of the parent resource (if the parent resource is not cluster scoped)<br />job: ts_<proxy type>_[<parent namespace>]_<parent_name> |  |  |
 
 
 #### Name
@@ -319,7 +358,24 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `image` _[Image](#image)_ | Nameserver image. |  |  |
+| `image` _[NameserverImage](#nameserverimage)_ | Nameserver image. Defaults to tailscale/k8s-nameserver:unstable. |  |  |
+
+
+#### NameserverImage
+
+
+
+
+
+
+
+_Appears in:_
+- [Nameserver](#nameserver)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `repo` _string_ | Repo defaults to tailscale/k8s-nameserver. |  |  |
+| `tag` _string_ | Tag defaults to unstable. |  |  |
 
 
 #### NameserverStatus
@@ -361,6 +417,7 @@ _Appears in:_
 | `nodeName` _string_ | Proxy Pod's node name.<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#scheduling |  |  |
 | `nodeSelector` _object (keys:string, values:string)_ | Proxy Pod's node selector.<br />By default Tailscale Kubernetes operator does not apply any node<br />selector.<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#scheduling |  |  |
 | `tolerations` _[Toleration](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#toleration-v1-core) array_ | Proxy Pod's tolerations.<br />By default Tailscale Kubernetes operator does not apply any<br />tolerations.<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#scheduling |  |  |
+| `topologySpreadConstraints` _[TopologySpreadConstraint](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#topologyspreadconstraint-v1-core) array_ | Proxy Pod's topology spread constraints.<br />By default Tailscale Kubernetes operator does not apply any topology spread constraints.<br />https://kubernetes.io/docs/concepts/scheduling-eviction/topology-spread-constraints/ |  |  |
 
 
 #### ProxyClass
@@ -375,7 +432,7 @@ given ProxyClass to resources created for a Connector, use
 connector.spec.proxyClass field.
 ProxyClass is a cluster scoped resource.
 More info:
-https://tailscale.com/kb/1236/kubernetes-operator#cluster-resource-customization-using-proxyclass-custom-resource.
+https://tailscale.com/kb/1445/kubernetes-operator-customization#cluster-resource-customization-using-proxyclass-custom-resource
 
 
 
@@ -447,6 +504,257 @@ _Appears in:_
 | `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#condition-v1-meta) array_ | List of status conditions to indicate the status of the ProxyClass.<br />Known condition types are `ProxyClassReady`. |  |  |
 
 
+#### ProxyGroup
+
+
+
+
+
+
+
+_Appears in:_
+- [ProxyGroupList](#proxygrouplist)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `apiVersion` _string_ | `tailscale.com/v1alpha1` | | |
+| `kind` _string_ | `ProxyGroup` | | |
+| `kind` _string_ | Kind is a string value representing the REST resource this object represents.<br />Servers may infer this from the endpoint the client submits requests to.<br />Cannot be updated.<br />In CamelCase.<br />More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds |  |  |
+| `apiVersion` _string_ | APIVersion defines the versioned schema of this representation of an object.<br />Servers should convert recognized schemas to the latest internal value, and<br />may reject unrecognized values.<br />More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources |  |  |
+| `metadata` _[ObjectMeta](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#objectmeta-v1-meta)_ | Refer to Kubernetes API documentation for fields of `metadata`. |  |  |
+| `spec` _[ProxyGroupSpec](#proxygroupspec)_ | Spec describes the desired ProxyGroup instances. |  |  |
+| `status` _[ProxyGroupStatus](#proxygroupstatus)_ | ProxyGroupStatus describes the status of the ProxyGroup resources. This is<br />set and managed by the Tailscale operator. |  |  |
+
+
+#### ProxyGroupList
+
+
+
+
+
+
+
+
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `apiVersion` _string_ | `tailscale.com/v1alpha1` | | |
+| `kind` _string_ | `ProxyGroupList` | | |
+| `kind` _string_ | Kind is a string value representing the REST resource this object represents.<br />Servers may infer this from the endpoint the client submits requests to.<br />Cannot be updated.<br />In CamelCase.<br />More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds |  |  |
+| `apiVersion` _string_ | APIVersion defines the versioned schema of this representation of an object.<br />Servers should convert recognized schemas to the latest internal value, and<br />may reject unrecognized values.<br />More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources |  |  |
+| `metadata` _[ListMeta](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#listmeta-v1-meta)_ | Refer to Kubernetes API documentation for fields of `metadata`. |  |  |
+| `items` _[ProxyGroup](#proxygroup) array_ |  |  |  |
+
+
+#### ProxyGroupSpec
+
+
+
+
+
+
+
+_Appears in:_
+- [ProxyGroup](#proxygroup)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `type` _[ProxyGroupType](#proxygrouptype)_ | Type of the ProxyGroup proxies. Currently the only supported type is egress. |  | Enum: [egress] <br />Type: string <br /> |
+| `tags` _[Tags](#tags)_ | Tags that the Tailscale devices will be tagged with. Defaults to [tag:k8s].<br />If you specify custom tags here, make sure you also make the operator<br />an owner of these tags.<br />See  https://tailscale.com/kb/1236/kubernetes-operator/#setting-up-the-kubernetes-operator.<br />Tags cannot be changed once a ProxyGroup device has been created.<br />Tag values must be in form ^tag:[a-zA-Z][a-zA-Z0-9-]*$. |  | Pattern: `^tag:[a-zA-Z][a-zA-Z0-9-]*$` <br />Type: string <br /> |
+| `replicas` _integer_ | Replicas specifies how many replicas to create the StatefulSet with.<br />Defaults to 2. |  |  |
+| `hostnamePrefix` _[HostnamePrefix](#hostnameprefix)_ | HostnamePrefix is the hostname prefix to use for tailnet devices created<br />by the ProxyGroup. Each device will have the integer number from its<br />StatefulSet pod appended to this prefix to form the full hostname.<br />HostnamePrefix can contain lower case letters, numbers and dashes, it<br />must not start with a dash and must be between 1 and 62 characters long. |  | Pattern: `^[a-z0-9][a-z0-9-]{0,61}$` <br />Type: string <br /> |
+| `proxyClass` _string_ | ProxyClass is the name of the ProxyClass custom resource that contains<br />configuration options that should be applied to the resources created<br />for this ProxyGroup. If unset, and there is no default ProxyClass<br />configured, the operator will create resources with the default<br />configuration. |  |  |
+
+
+#### ProxyGroupStatus
+
+
+
+
+
+
+
+_Appears in:_
+- [ProxyGroup](#proxygroup)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#condition-v1-meta) array_ | List of status conditions to indicate the status of the ProxyGroup<br />resources. Known condition types are `ProxyGroupReady`. |  |  |
+| `devices` _[TailnetDevice](#tailnetdevice) array_ | List of tailnet devices associated with the ProxyGroup StatefulSet. |  |  |
+
+
+#### ProxyGroupType
+
+_Underlying type:_ _string_
+
+
+
+_Validation:_
+- Enum: [egress]
+- Type: string
+
+_Appears in:_
+- [ProxyGroupSpec](#proxygroupspec)
+
+
+
+#### Recorder
+
+
+
+
+
+
+
+_Appears in:_
+- [RecorderList](#recorderlist)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `apiVersion` _string_ | `tailscale.com/v1alpha1` | | |
+| `kind` _string_ | `Recorder` | | |
+| `kind` _string_ | Kind is a string value representing the REST resource this object represents.<br />Servers may infer this from the endpoint the client submits requests to.<br />Cannot be updated.<br />In CamelCase.<br />More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds |  |  |
+| `apiVersion` _string_ | APIVersion defines the versioned schema of this representation of an object.<br />Servers should convert recognized schemas to the latest internal value, and<br />may reject unrecognized values.<br />More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources |  |  |
+| `metadata` _[ObjectMeta](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#objectmeta-v1-meta)_ | Refer to Kubernetes API documentation for fields of `metadata`. |  |  |
+| `spec` _[RecorderSpec](#recorderspec)_ | Spec describes the desired recorder instance. |  |  |
+| `status` _[RecorderStatus](#recorderstatus)_ | RecorderStatus describes the status of the recorder. This is set<br />and managed by the Tailscale operator. |  |  |
+
+
+#### RecorderContainer
+
+
+
+
+
+
+
+_Appears in:_
+- [RecorderPod](#recorderpod)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `env` _[Env](#env) array_ | List of environment variables to set in the container.<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#environment-variables<br />Note that environment variables provided here will take precedence<br />over Tailscale-specific environment variables set by the operator,<br />however running proxies with custom values for Tailscale environment<br />variables (i.e TS_USERSPACE) is not recommended and might break in<br />the future. |  |  |
+| `image` _string_ | Container image name including tag. Defaults to docker.io/tailscale/tsrecorder<br />with the same tag as the operator, but the official images are also<br />available at ghcr.io/tailscale/tsrecorder.<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#image |  |  |
+| `imagePullPolicy` _[PullPolicy](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#pullpolicy-v1-core)_ | Image pull policy. One of Always, Never, IfNotPresent. Defaults to Always.<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#image |  | Enum: [Always Never IfNotPresent] <br /> |
+| `resources` _[ResourceRequirements](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#resourcerequirements-v1-core)_ | Container resource requirements.<br />By default, the operator does not apply any resource requirements. The<br />amount of resources required wil depend on the volume of recordings sent.<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#resources |  |  |
+| `securityContext` _[SecurityContext](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#securitycontext-v1-core)_ | Container security context. By default, the operator does not apply any<br />container security context.<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#security-context |  |  |
+
+
+#### RecorderList
+
+
+
+
+
+
+
+
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `apiVersion` _string_ | `tailscale.com/v1alpha1` | | |
+| `kind` _string_ | `RecorderList` | | |
+| `kind` _string_ | Kind is a string value representing the REST resource this object represents.<br />Servers may infer this from the endpoint the client submits requests to.<br />Cannot be updated.<br />In CamelCase.<br />More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds |  |  |
+| `apiVersion` _string_ | APIVersion defines the versioned schema of this representation of an object.<br />Servers should convert recognized schemas to the latest internal value, and<br />may reject unrecognized values.<br />More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources |  |  |
+| `metadata` _[ListMeta](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#listmeta-v1-meta)_ | Refer to Kubernetes API documentation for fields of `metadata`. |  |  |
+| `items` _[Recorder](#recorder) array_ |  |  |  |
+
+
+#### RecorderPod
+
+
+
+
+
+
+
+_Appears in:_
+- [RecorderStatefulSet](#recorderstatefulset)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `labels` _object (keys:string, values:string)_ | Labels that will be added to Recorder Pods. Any labels specified here<br />will be merged with the default labels applied to the Pod by the operator.<br />https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#syntax-and-character-set |  |  |
+| `annotations` _object (keys:string, values:string)_ | Annotations that will be added to Recorder Pods. Any annotations<br />specified here will be merged with the default annotations applied to<br />the Pod by the operator.<br />https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/#syntax-and-character-set |  |  |
+| `affinity` _[Affinity](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#affinity-v1-core)_ | Affinity rules for Recorder Pods. By default, the operator does not<br />apply any affinity rules.<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#affinity |  |  |
+| `container` _[RecorderContainer](#recordercontainer)_ | Configuration for the Recorder container running tailscale. |  |  |
+| `securityContext` _[PodSecurityContext](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#podsecuritycontext-v1-core)_ | Security context for Recorder Pods. By default, the operator does not<br />apply any Pod security context.<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#security-context-2 |  |  |
+| `imagePullSecrets` _[LocalObjectReference](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#localobjectreference-v1-core) array_ | Image pull Secrets for Recorder Pods.<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#PodSpec |  |  |
+| `nodeSelector` _object (keys:string, values:string)_ | Node selector rules for Recorder Pods. By default, the operator does<br />not apply any node selector rules.<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#scheduling |  |  |
+| `tolerations` _[Toleration](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#toleration-v1-core) array_ | Tolerations for Recorder Pods. By default, the operator does not apply<br />any tolerations.<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#scheduling |  |  |
+
+
+#### RecorderSpec
+
+
+
+
+
+
+
+_Appears in:_
+- [Recorder](#recorder)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `statefulSet` _[RecorderStatefulSet](#recorderstatefulset)_ | Configuration parameters for the Recorder's StatefulSet. The operator<br />deploys a StatefulSet for each Recorder resource. |  |  |
+| `tags` _[Tags](#tags)_ | Tags that the Tailscale device will be tagged with. Defaults to [tag:k8s].<br />If you specify custom tags here, make sure you also make the operator<br />an owner of these tags.<br />See  https://tailscale.com/kb/1236/kubernetes-operator/#setting-up-the-kubernetes-operator.<br />Tags cannot be changed once a Recorder node has been created.<br />Tag values must be in form ^tag:[a-zA-Z][a-zA-Z0-9-]*$. |  | Pattern: `^tag:[a-zA-Z][a-zA-Z0-9-]*$` <br />Type: string <br /> |
+| `enableUI` _boolean_ | Set to true to enable the Recorder UI. The UI lists and plays recorded sessions.<br />The UI will be served at <MagicDNS name of the recorder>:443. Defaults to false.<br />Corresponds to --ui tsrecorder flag https://tailscale.com/kb/1246/tailscale-ssh-session-recording#deploy-a-recorder-node.<br />Required if S3 storage is not set up, to ensure that recordings are accessible. |  |  |
+| `storage` _[Storage](#storage)_ | Configure where to store session recordings. By default, recordings will<br />be stored in a local ephemeral volume, and will not be persisted past the<br />lifetime of a specific pod. |  |  |
+
+
+#### RecorderStatefulSet
+
+
+
+
+
+
+
+_Appears in:_
+- [RecorderSpec](#recorderspec)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `labels` _object (keys:string, values:string)_ | Labels that will be added to the StatefulSet created for the Recorder.<br />Any labels specified here will be merged with the default labels applied<br />to the StatefulSet by the operator.<br />https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#syntax-and-character-set |  |  |
+| `annotations` _object (keys:string, values:string)_ | Annotations that will be added to the StatefulSet created for the Recorder.<br />Any Annotations specified here will be merged with the default annotations<br />applied to the StatefulSet by the operator.<br />https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/#syntax-and-character-set |  |  |
+| `pod` _[RecorderPod](#recorderpod)_ | Configuration for pods created by the Recorder's StatefulSet. |  |  |
+
+
+#### RecorderStatus
+
+
+
+
+
+
+
+_Appears in:_
+- [Recorder](#recorder)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#condition-v1-meta) array_ | List of status conditions to indicate the status of the Recorder.<br />Known condition types are `RecorderReady`. |  |  |
+| `devices` _[RecorderTailnetDevice](#recordertailnetdevice) array_ | List of tailnet devices associated with the Recorder StatefulSet. |  |  |
+
+
+#### RecorderTailnetDevice
+
+
+
+
+
+
+
+_Appears in:_
+- [RecorderStatus](#recorderstatus)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `hostname` _string_ | Hostname is the fully qualified domain name of the device.<br />If MagicDNS is enabled in your tailnet, it is the MagicDNS name of the<br />node. |  |  |
+| `tailnetIPs` _string array_ | TailnetIPs is the set of tailnet IP addresses (both IPv4 and IPv6)<br />assigned to the device. |  |  |
+| `url` _string_ | URL where the UI is available if enabled for replaying recordings. This<br />will be an HTTPS MagicDNS URL. You must be connected to the same tailnet<br />as the recorder to access it. |  |  |
+
+
 #### Route
 
 _Underlying type:_ _string_
@@ -474,8 +782,75 @@ _Validation:_
 - Type: string
 
 _Appears in:_
+- [AppConnector](#appconnector)
 - [SubnetRouter](#subnetrouter)
 
+
+
+#### S3
+
+
+
+
+
+
+
+_Appears in:_
+- [Storage](#storage)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `endpoint` _string_ | S3-compatible endpoint, e.g. s3.us-east-1.amazonaws.com. |  |  |
+| `bucket` _string_ | Bucket name to write to. The bucket is expected to be used solely for<br />recordings, as there is no stable prefix for written object names. |  |  |
+| `credentials` _[S3Credentials](#s3credentials)_ | Configure environment variable credentials for managing objects in the<br />configured bucket. If not set, tsrecorder will try to acquire credentials<br />first from the file system and then the STS API. |  |  |
+
+
+#### S3Credentials
+
+
+
+
+
+
+
+_Appears in:_
+- [S3](#s3)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `secret` _[S3Secret](#s3secret)_ | Use a Kubernetes Secret from the operator's namespace as the source of<br />credentials. |  |  |
+
+
+#### S3Secret
+
+
+
+
+
+
+
+_Appears in:_
+- [S3Credentials](#s3credentials)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `name` _string_ | The name of a Kubernetes Secret in the operator's namespace that contains<br />credentials for writing to the configured bucket. Each key-value pair<br />from the secret's data will be mounted as an environment variable. It<br />should include keys for AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY if<br />using a static access key. |  |  |
+
+
+#### ServiceMonitor
+
+
+
+
+
+
+
+_Appears in:_
+- [Metrics](#metrics)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `enable` _boolean_ | If Enable is set to true, a Prometheus ServiceMonitor will be created. Enable can only be set to true if metrics are enabled. |  |  |
 
 
 #### StatefulSet
@@ -494,6 +869,22 @@ _Appears in:_
 | `labels` _object (keys:string, values:string)_ | Labels that will be added to the StatefulSet created for the proxy.<br />Any labels specified here will be merged with the default labels<br />applied to the StatefulSet by the Tailscale Kubernetes operator as<br />well as any other labels that might have been applied by other<br />actors.<br />Label keys and values must be valid Kubernetes label keys and values.<br />https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#syntax-and-character-set |  |  |
 | `annotations` _object (keys:string, values:string)_ | Annotations that will be added to the StatefulSet created for the proxy.<br />Any Annotations specified here will be merged with the default annotations<br />applied to the StatefulSet by the Tailscale Kubernetes operator as<br />well as any other annotations that might have been applied by other<br />actors.<br />Annotations must be valid Kubernetes annotations.<br />https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/#syntax-and-character-set |  |  |
 | `pod` _[Pod](#pod)_ | Configuration for the proxy Pod. |  |  |
+
+
+#### Storage
+
+
+
+
+
+
+
+_Appears in:_
+- [RecorderSpec](#recorderspec)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `s3` _[S3](#s3)_ | Configure an S3-compatible API for storage. Required if the UI is not<br />enabled, to ensure that recordings are accessible. |  |  |
 
 
 #### SubnetRouter
@@ -540,7 +931,26 @@ _Validation:_
 
 _Appears in:_
 - [ConnectorSpec](#connectorspec)
+- [ProxyGroupSpec](#proxygroupspec)
+- [RecorderSpec](#recorderspec)
 
+
+
+#### TailnetDevice
+
+
+
+
+
+
+
+_Appears in:_
+- [ProxyGroupStatus](#proxygroupstatus)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `hostname` _string_ | Hostname is the fully qualified domain name of the device.<br />If MagicDNS is enabled in your tailnet, it is the MagicDNS name of the<br />node. |  |  |
+| `tailnetIPs` _string array_ | TailnetIPs is the set of tailnet IP addresses (both IPv4 and IPv6)<br />assigned to the device. |  |  |
 
 
 #### TailscaleConfig
@@ -556,6 +966,6 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `acceptRoutes` _boolean_ | AcceptRoutes can be set to true to make the proxy instance accept<br />routes advertized by other nodes on the tailnet, such as subnet<br />routes.<br />This is equivalent of passing --accept-routes flag to a tailscale Linux client.<br />https://tailscale.com/kb/1019/subnets#use-your-subnet-routes-from-other-machines<br />Defaults to false. |  |  |
+| `acceptRoutes` _boolean_ | AcceptRoutes can be set to true to make the proxy instance accept<br />routes advertized by other nodes on the tailnet, such as subnet<br />routes.<br />This is equivalent of passing --accept-routes flag to a tailscale Linux client.<br />https://tailscale.com/kb/1019/subnets#use-your-subnet-routes-from-other-devices<br />Defaults to false. |  |  |
 
 

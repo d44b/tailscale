@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-//go:build go1.21
+//go:build go1.23
 
 // The tailscaled program is the Tailscale client daemon. It's configured
 // and controlled via the tailscale CLI program.
@@ -417,6 +417,10 @@ func run() (err error) {
 
 	sys.Set(driveimpl.NewFileSystemForRemote(logf))
 
+	if app := envknob.App(); app != "" {
+		hostinfo.SetApp(app)
+	}
+
 	return startIPNServer(context.Background(), logf, pol.PublicID, sys)
 }
 
@@ -676,11 +680,14 @@ func tryEngine(logf logger.Logf, sys *tsd.System, name string) (onlyNetstack boo
 		ListenPort:    args.port,
 		NetMon:        sys.NetMon.Get(),
 		HealthTracker: sys.HealthTracker(),
+		Metrics:       sys.UserMetricsRegistry(),
 		Dialer:        sys.Dialer.Get(),
 		SetSubsystem:  sys.Set,
 		ControlKnobs:  sys.ControlKnobs(),
 		DriveForLocal: driveimpl.NewFileSystemForLocal(logf),
 	}
+
+	sys.HealthTracker().SetMetricsRegistry(sys.UserMetricsRegistry())
 
 	onlyNetstack = name == "userspace-networking"
 	netstackSubnetRouter := onlyNetstack // but mutated later on some platforms
@@ -781,7 +788,6 @@ func runDebugServer(mux *http.ServeMux, addr string) {
 }
 
 func newNetstack(logf logger.Logf, sys *tsd.System) (*netstack.Impl, error) {
-	tfs, _ := sys.DriveForLocal.GetOK()
 	ret, err := netstack.Create(logf,
 		sys.Tun.Get(),
 		sys.Engine.Get(),
@@ -789,7 +795,6 @@ func newNetstack(logf logger.Logf, sys *tsd.System) (*netstack.Impl, error) {
 		sys.Dialer.Get(),
 		sys.DNSManager.Get(),
 		sys.ProxyMapper(),
-		tfs,
 	)
 	if err != nil {
 		return nil, err
