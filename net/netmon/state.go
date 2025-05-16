@@ -719,7 +719,7 @@ func netInterfaces() ([]Interface, error) {
 		return nil, err
 	}
 
-	// Prepare the slice we’ll populate with allowed interfaces.
+	// Prepare the slice we'll populate with allowed interfaces.
 	ret := make([]Interface, 0, len(ifs))
 
 	// Read TS_ALLOWED_INTERFACES and split on whitespace. For example:
@@ -730,7 +730,6 @@ func netInterfaces() ([]Interface, error) {
 	// If TS_ALLOWED_INTERFACES is empty, return all interfaces.
 	if len(allowed) == 0 {
 		for _, ifc := range ifs {
-			fmt.Printf("[tailscale] Adding interface %q (no TS_ALLOWED_INTERFACES set)\n", ifc.Name)
 			ret = append(ret, Interface{Interface: &ifc})
 		}
 		return ret, nil
@@ -741,11 +740,9 @@ func netInterfaces() ([]Interface, error) {
 		for _, pattern := range allowed {
 			match, err := filepath.Match(pattern, ifc.Name)
 			if err != nil {
-				fmt.Printf("[tailscale] Ignoring invalid pattern %q in TS_ALLOWED_INTERFACES: %v\n", pattern, err)
 				continue
 			}
 			if match {
-				fmt.Printf("[tailscale] Allowing interface %q (matched pattern %q)\n", ifc.Name, pattern)
 				ret = append(ret, Interface{Interface: &ifc})
 				break // No need to check other patterns if one matched
 			}
